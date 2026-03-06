@@ -1,0 +1,129 @@
+name: Build Windows Server 2025 Image on GCP
+
+on:
+  push:
+    branches: [ main, master ]
+    paths:
+      - 'packer/**'
+      - '.github/workflows/build-windows-image.yml'
+  pull_request:
+    branches: [ main, master ]
+    paths:
+      - 'packer/**'
+  workflow_dispatch:
+    inputs:
+      image_suffix:
+        description: 'Custom suffix for image name'
+        required: false
+        type: string
+
+env:
+  PACKER_VERSION: "1.10.0"
+  GCP_REGION: "us-central1"
+  GCP_ZONE: "us-central1-a"
+
+jobs:
+  validate:
+    name: Validate Packer Template
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Packer
+        uses: hashicorp/setup-packer@v3
+        with:
+          version: ${{ env.PACKER_VERSION }}
+
+      - name: Initialize Packer plugins
+        working-directory: ./packer
+        run: packer init .
+
+      - name: Validate Packer template
+        working-directory: ./packer
+        run: |
+          echo "🔍 Validating Packer configuration..."
+          packer validate \
+            -var "project_id=dummy-project-for-validation" \
+            -var "zone=${{ env.GCP_ZONE }}" \
+            -var "region=${{ env.GCP_REGION }}" \
+            .
+
+  build:
+    name: Build Windows Server 2025 Image
+    needs: validate
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || github.event_name == 'workflow_dispatch'
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Packer
+        uses: hashicorp/setup-packer@v3
+        with:
+          version: ${{ env.PACKER_VERSION }}
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: '${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}'
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+
+      - name: Initialize Packer plugins
+        working-directory: ./packer
+        run: packer init .
+
+      - name: Generate Image Name
+        id: image_name
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ github.event.inputs.image_suffix }}" != "" ]]; then
+            SUFFIX="${{ github.event.inputs.image_suffix }}"
+          else
+            SUFFIX="$(date +'%Y%m%d-%H%M%S')"
+          fi
+          echo "IMAGE_NAME=windows-2025-iis-${SUFFIX}" >> $GITHUB_OUTPUT
+          echo "🔨 Image name: windows-2025-iis-${SUFFIX}"
+
+      - name: Build Image with Packer
+        working-directory: ./packer
+        run: |
+          packer build \
+            -var "project_id=${{ secrets.GCP_PROJECT_ID }}" \
+            -var "region=${{ env.GCP_REGION }}" \
+            -var "zone=${{ env.GCP_ZONE }}" \
+            -var "image_name=${{ steps.image_name.outputs.IMAGE_NAME }}" \
+            -var "ssh_password=${{ secrets.SSH_PASSWORD }}" \
+            .
+
+      - name: Upload Build Manifest
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: packer-manifest
+          path: packer/manifest.json
+          retention-days: 7
+
+      - name: Create Build Summary
+        if: success()
+        run: |
+          echo "## ✅ Windows Server 2025 Image Build Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Image Name | ${{ steps.image_name.outputs.IMAGE_NAME }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Image Family | windows-2025-iis |" >> $GITHUB_STEP_SUMMARY
+          echo "| Project | ${{ secrets.GCP_PROJECT_ID }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Region | ${{ env.GCP_REGION }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Zone | ${{ env.GCP_ZONE }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Build Trigger | ${{ github.event_name }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Next Steps" >> $GITHUB_STEP_SUMMARY
+          echo "1. Go to [Compute Engine → Images](https://console.cloud.google.com/compute/images?project=${{ secrets.GCP_PROJECT_ID }})" >> $GITHUB_STEP_SUMMARY
+          echo "2. Create a new VM instance using this image" >> $GITHUB_STEP_SUMMARY
+          echo "3. SSH/RDP into the instance to verify IIS and OpenSSH" >> $GITHUB_STEP_SUMMARY
