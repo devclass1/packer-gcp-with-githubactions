@@ -47,3 +47,30 @@ gcloud projects add-iam-policy-binding YOUR_PROJECT_ID \
 # Download service account key
 gcloud iam service-accounts keys create ~/gcp-key.json \
     --iam-account=packer-builder@YOUR_PROJECT_ID.iam.gserviceaccount.com
+
+## GitHub Secrets Configuration
+
+Add these secrets to your GitHub repository (**Settings → Secrets and variables → Actions**):
+
+| Secret Name | Description |
+|------------|-------------|
+| `GCP_PROJECT_ID` | Your GCP project ID |
+| `GCP_SERVICE_ACCOUNT_KEY` | Full JSON content of the service account key |
+| `SSH_PASSWORD` | (Optional) Custom SSH password for packer user |
+
+## Firewall Rules
+
+Create the following firewall rules to allow Packer to communicate with the builder instance:
+
+```bash
+# Allow SSH access for Packer communication
+gcloud compute firewall-rules create allow-packer-ssh \
+    --allow tcp:22 \
+    --source-ranges 0.0.0.0/0 \
+    --target-tags packer-builder
+
+# Allow WinRM access for Packer communication (fallback method)
+gcloud compute firewall-rules create allow-packer-winrm \
+    --allow tcp:5985-5986 \
+    --source-ranges 0.0.0.0/0 \
+    --target-tags packer-builder
